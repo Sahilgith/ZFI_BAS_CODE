@@ -1,0 +1,101 @@
+sap.ui.define([
+    "sap/m/MessageToast",
+    "zppsaktip/libs/pdf-lib-wrapper"
+], function (MessageToast, PDFLibPromise) {
+    'use strict';
+
+    return {
+        Preview: async function(oEvent) {
+            var that = this;
+            that.getView().setBusy(true);
+
+            let PDFLib;
+            try {
+                PDFLib = await PDFLibPromise;
+            } catch (e) {
+                that.getView().setBusy(false);
+                sap.m.MessageBox.error("PDF-lib failed to load.");
+                return;
+            }            
+
+            const selectedItems = oEvent.getSource().getParent().getParent().getSelectedItems();
+            const pdfDataArray = [];
+
+            for (let i = 0; i < selectedItems.length; i++) {
+                const obj = selectedItems[i].getBindingContext().getObject();
+                const AccountingDocument  = obj.AccountingDocument ;
+                 const CompanyCode  = obj.CompanyCode ;
+                const FiscalYear  = obj.FiscalYear ;
+               
+            
+                const encodedParams = {
+                    AccountingDocument: encodeURIComponent(AccountingDocument),
+                     CompanyCode: encodeURIComponent(CompanyCode),
+                    FiscalYear: encodeURIComponent(FiscalYear)
+                    
+                };
+
+                const sPath = `/ZC_PAY_VHC(AccountingDocument='${encodedParams.AccountingDocument}',CompanyCode='${encodedParams.CompanyCode}',FiscalYear='${encodedParams.FiscalYear}')`;
+                const sServiceUrl = "/sap/opu/odata/sap/ZSB_PAY_VHC";
+                const oModel = new sap.ui.model.odata.ODataModel(sServiceUrl, true);
+
+                try {
+                    const oData = await new Promise((resolve, reject) => {
+                        oModel.read(sPath, {
+                            success: resolve,
+                            error: reject
+                        });
+                    });
+                    console.log("OData Response:", JSON.stringify(oData, null, 2));
+                    pdfDataArray.push(oData.base64); // Assuming Base64 string
+                } catch (error) {
+                    that.getView().setBusy(false);
+                    sap.m.MessageBox.error("Error fetching PDF file.");
+                    return;
+                }
+            }
+
+            await that.mergeAndPreviewPDFs(pdfDataArray, PDFLib);
+            that.getView().setBusy(false);
+        },
+
+        mergeAndPreviewPDFs: async function (base64Array, PDFLib) {
+
+            if (!PDFLib || !PDFLib.PDFDocument) {
+                sap.m.MessageBox.error("PDF-lib is not available.");
+                return;
+            }
+            const { PDFDocument } = PDFLib;
+
+            const mergedPdf = await PDFDocument.create();
+
+            for (let base64 of base64Array) {
+
+                if (!base64) {
+                    console.error("Empty PDF received");
+                    continue;
+                }
+
+                const byteArray = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
+
+                const pdfDoc = await PDFLib.PDFDocument.load(byteArray);
+                const pages = await mergedPdf.copyPages(pdfDoc, pdfDoc.getPageIndices());
+                pages.forEach(page => mergedPdf.addPage(page));
+            }
+
+            const mergedBytes = await mergedPdf.save();
+            const blob = new Blob([mergedBytes], { type: 'application/pdf' });
+            const blobURL = URL.createObjectURL(blob);
+
+            const printWindow = window.open(blobURL);
+            if (printWindow) {
+                printWindow.onload = function () {
+                    printWindow.focus();
+                    printWindow.print();
+                };
+            } else {
+                sap.m.MessageBox.warning("Popup blocked. Please allow popups for PDF preview.");
+            }
+        }
+    };
+});
